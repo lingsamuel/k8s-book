@@ -1,0 +1,327 @@
+<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><meta name=description content="Kubelet Startup #  Kubelet 的起始源码按照惯例位于 cmd/kubelet/kubelet.go，本质上是对 pkg/kubelet/kubelet.go 的封装。
+Kubelet startup:
+sequenceDiagram participant main as cmd/kubelet/kubelet.go participant server as cmd/kubelet/app/server.go participant kubelet as pkg/kubelet/kubelet.go participant cfg as pkg/kubelet/config/config.go participant lw as ListAndWatch main-->>server: NewKubeletCommand() server-->>server: Run() server-->>server: RunKubelet() server-->>server: createAndInitKubelet() server-->>+kubelet: NewMainKubelet() kubelet-->>+cfg: NewPodConfig() cfg-->>+lw: NewSourceApiserver() lw-->>-cfg: Channel cfg-->>-kubelet: *PodConfig kubelet-->>-server: *Kubelet #server-->>kubelet: StartGarbageCollection server-->>server: startKubelet() server-->>kubelet: go Run() par loop Events from *PodConfig lw-->>kubelet: Events kubelet-->>kubelet: syncLoop end server-->>kubelet: go ListenAndServe() Kubelet 的核心组件（在 NewMainKubelet 中初始化）包括但不限于："><meta name=theme-color content="#FFFFFF"><meta property="og:title" content><meta property="og:description" content="Kubelet Startup #  Kubelet 的起始源码按照惯例位于 cmd/kubelet/kubelet.go，本质上是对 pkg/kubelet/kubelet.go 的封装。
+Kubelet startup:
+sequenceDiagram participant main as cmd/kubelet/kubelet.go participant server as cmd/kubelet/app/server.go participant kubelet as pkg/kubelet/kubelet.go participant cfg as pkg/kubelet/config/config.go participant lw as ListAndWatch main-->>server: NewKubeletCommand() server-->>server: Run() server-->>server: RunKubelet() server-->>server: createAndInitKubelet() server-->>+kubelet: NewMainKubelet() kubelet-->>+cfg: NewPodConfig() cfg-->>+lw: NewSourceApiserver() lw-->>-cfg: Channel cfg-->>-kubelet: *PodConfig kubelet-->>-server: *Kubelet #server-->>kubelet: StartGarbageCollection server-->>server: startKubelet() server-->>kubelet: go Run() par loop Events from *PodConfig lw-->>kubelet: Events kubelet-->>kubelet: syncLoop end server-->>kubelet: go ListenAndServe() Kubelet 的核心组件（在 NewMainKubelet 中初始化）包括但不限于："><meta property="og:type" content="article"><meta property="og:url" content="https://example.com/kubernetes/kubelet/startup/"><meta property="article:modified_time" content="2020-11-05T17:22:31+08:00"><title>Startup | Hugo Book</title><link rel=manifest href=/manifest.json><link rel=icon href=/favicon.png type=image/x-icon><link rel=stylesheet href=/book.min.134b70e5316650a530cb42e4e8630b2a01d532bebfc0337028211175336e4806.css integrity="sha256-E0tw5TFmUKUwy0Lk6GMLKgHVMr6/wDNwKCERdTNuSAY="><script defer src=/en.search.min.9234f5cfc4688c29fbbd0dae37b86e2d77f09f81edc5f9a17e03d140d69d1194.js integrity="sha256-kjT1z8RojCn7vQ2uN7huLXfwn4HtxfmhfgPRQNadEZQ="></script><script defer src=/sw.min.74a8bb07f0bee86d6bb9a2750f073f14d93c7e4512f28860370cfd879e9719b4.js integrity="sha256-dKi7B/C+6G1ruaJ1Dwc/FNk8fkUS8ohgNwz9h56XGbQ="></script></head><body><input type=checkbox class="hidden toggle" id=menu-control>
+<input type=checkbox class="hidden toggle" id=toc-control><main class="container flex"><aside class=book-menu><nav><h2 class=book-brand><a href=/><span>Hugo Book</span></a></h2><div class=book-search><input type=text id=book-search-input placeholder=Search aria-label=Search maxlength=64 data-hotkeys=s/><div class="book-search-spinner hidden"></div><ul id=book-search-results></ul></div><ul><li><p><a href=README.md>Introduction</a></p></li><li><p><a href=/kubernetes/basic-components/>Basic Components</a></p></li><li><p>Kubelet</p><ul><li><a href=/kubernetes/kubelet/startup/ class=active>Startup</a></li></ul></li><li><p><a href=/kubernetes/informer/>Informer</a></p></li></ul><ul><li><a href=/posts/>Blog</a></li><li><a href=https://github.com/alex-shpak/hugo-book target=_blank rel=noopener>Github</a></li><li><a href=https://themes.gohugo.io/hugo-book/ target=_blank rel=noopener>Hugo Themes</a></li></ul></nav><script>(function(){var menu=document.querySelector("aside.book-menu nav");addEventListener("beforeunload",function(event){localStorage.setItem("menu.scrollTop",menu.scrollTop);});menu.scrollTop=localStorage.getItem("menu.scrollTop");})();</script></aside><div class=book-page><header class=book-header><div class="flex align-center justify-between"><label for=menu-control><img src=/svg/menu.svg class=book-icon alt=Menu></label>
+<strong>Startup</strong>
+<label for=toc-control><img src=/svg/toc.svg class=book-icon alt="Table of Contents"></label></div><aside class="hidden clearfix"><nav id=TableOfContents><ul><li><a href=#kubelet-startup>Kubelet Startup</a><ul><li><a href=#run>Run</a></li><li><a href=#syncloop>syncLoop</a><ul><li><a href=#synchandler-interface>SyncHandler (interface)</a></li></ul></li><li><a href=#kubeletsyncpod>Kubelet.syncPod</a></li><li><a href=#configch>configCh</a><ul><li><a href=#podconfig>PodConfig</a></li></ul></li><li><a href=#listandwatch>ListAndWatch</a></li></ul></li></ul></nav></aside></header><article class=markdown><h1 id=kubelet-startup>Kubelet Startup
+<a class=anchor href=#kubelet-startup>#</a></h1><p>Kubelet 的起始源码按照惯例位于 <code>cmd/kubelet/kubelet.go</code>，本质上是对 <code>pkg/kubelet/kubelet.go</code> 的封装。</p><p>Kubelet startup:</p><pre><code class=language-mermaid data-lang=mermaid>sequenceDiagram
+  participant main as cmd/kubelet/kubelet.go
+  participant server as cmd/kubelet/app/server.go
+  participant kubelet as pkg/kubelet/kubelet.go
+  participant cfg as pkg/kubelet/config/config.go
+  participant lw as ListAndWatch
+  main--&gt;&gt;server: NewKubeletCommand()
+  server--&gt;&gt;server: Run()
+  server--&gt;&gt;server: RunKubelet()
+  server--&gt;&gt;server: createAndInitKubelet()
+  
+  server--&gt;&gt;+kubelet: NewMainKubelet()
+    kubelet--&gt;&gt;+cfg: NewPodConfig()
+      cfg--&gt;&gt;+lw: NewSourceApiserver()
+      lw--&gt;&gt;-cfg: Channel
+    cfg--&gt;&gt;-kubelet: *PodConfig
+  kubelet--&gt;&gt;-server: *Kubelet
+  
+  #server--&gt;&gt;kubelet: StartGarbageCollection
+  server--&gt;&gt;server: startKubelet()
+  server--&gt;&gt;kubelet: go Run()
+  par loop Events from *PodConfig
+    lw--&gt;&gt;kubelet: Events
+    kubelet--&gt;&gt;kubelet: syncLoop
+  end
+  server--&gt;&gt;kubelet: go ListenAndServe()
+</code></pre><p>Kubelet 的核心组件（在 <code>NewMainKubelet</code> 中初始化）包括但不限于：</p><ul><li>kubelet<ul><li>SharedInformer</li><li>Indexer</li><li>NodeLister</li><li>ServiceLister</li><li>ListWatch</li><li>ProbeManager<ul><li>StatusManager</li><li>LivenessManager</li><li>StartupManager</li></ul></li><li>PodManager</li><li>Runtime (NewKubeGenericRuntimeManager)</li><li>PLEG</li><li>ContainerGC</li><li>ImageGCManager</li><li>CertificateManager</li><li>TokenManager</li><li>PluginManager</li><li>VolumeManager</li><li>PodWorkers</li><li>PodKiller</li><li>EvictionManager</li><li>PodAdmitHandler</li><li>PodSyncLoopHandler (ActiveDeadlineHandler)</li><li>PodSyncHandler (ActiveDeadlineHandler)</li></ul></li></ul><h2 id=run>Run
+<a class=anchor href=#run>#</a></h2><p><code>Run</code> 函数启动 kublet 的核心功能：处理配置更新。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// Run starts the kubelet reacting to config updates
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>kl</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>) <span style=color:#a6e22e>Run</span>(<span style=color:#a6e22e>updates</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>PodUpdate</span>) {
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>imageManager</span>.<span style=color:#a6e22e>Start</span>()
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>serverCertificateManager</span>.<span style=color:#a6e22e>Start</span>()
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>oomWatcher</span>.<span style=color:#a6e22e>Start</span>(<span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>nodeRef</span>)
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>resourceAnalyzer</span>.<span style=color:#a6e22e>Start</span>()
+  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>volumeManager</span>.<span style=color:#a6e22e>Run</span>(<span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>sourcesReady</span>, <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>NeverStop</span>)
+  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>Until</span>(<span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>syncNodeStatus</span>, <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>nodeStatusUpdateFrequency</span>, <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>NeverStop</span>)
+  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>fastStatusUpdateOnce</span>()
+  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>nodeLeaseController</span>.<span style=color:#a6e22e>Run</span>(<span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>NeverStop</span>)
+  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>Until</span>(<span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>updateRuntimeUp</span>, <span style=color:#ae81ff>5</span><span style=color:#f92672>*</span><span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Second</span>, <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>NeverStop</span>)
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>initNetworkUtil</span>()
+  <span style=color:#75715e>// Start a goroutine responsible for killing pods (that are not properly
+</span><span style=color:#75715e></span>  <span style=color:#75715e>// handled by pod workers).
+</span><span style=color:#75715e></span>  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>Until</span>(<span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>podKiller</span>.<span style=color:#a6e22e>PerformPodKillingWork</span>, <span style=color:#ae81ff>1</span><span style=color:#f92672>*</span><span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Second</span>, <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>NeverStop</span>)
+  <span style=color:#75715e>// Start component sync loops.
+</span><span style=color:#75715e></span>  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>statusManager</span>.<span style=color:#a6e22e>Start</span>()
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>probeManager</span>.<span style=color:#a6e22e>Start</span>()
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>runtimeClassManager</span>.<span style=color:#a6e22e>Start</span>(<span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>NeverStop</span>)
+  <span style=color:#75715e>// Start the pod lifecycle event generator.
+</span><span style=color:#75715e></span>  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>pleg</span>.<span style=color:#a6e22e>Start</span>()
+  
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>syncLoop</span>(<span style=color:#a6e22e>updates</span>, <span style=color:#a6e22e>kl</span>)
+}
+</code></pre></div><p>各个 manager 的启动与 iptables 的配置暂时可以略过。重点关注 <code>syncLoop</code> 函数。这是 kubelet 的核心函数。</p><h2 id=syncloop>syncLoop
+<a class=anchor href=#syncloop>#</a></h2><p>在 <code>syncLoop</code> 最后的 for 循环里，调用了 <code>syncLoopIteration</code> 函数：</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>kl</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>) <span style=color:#a6e22e>syncLoopIteration</span>(<span style=color:#a6e22e>configCh</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>PodUpdate</span>, <span style=color:#a6e22e>handler</span> <span style=color:#a6e22e>SyncHandler</span>,
+  <span style=color:#a6e22e>syncCh</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Time</span>, <span style=color:#a6e22e>housekeepingCh</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Time</span>, <span style=color:#a6e22e>plegCh</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>pleg</span>.<span style=color:#a6e22e>PodLifecycleEvent</span>) <span style=color:#66d9ef>bool</span>
+</code></pre></div><p>参数 <code>configCh</code> 是接收配置更新的 channel，后续配置的变更都从这个 channel 读取。<code>syncCh</code> 和 <code>housekeepingCh</code> 是定时触发的同步事件。</p><p>此外，函数还从 <code>livenessManager</code> 里读取事件。</p><p>参数 <code>handler</code> 是对 Pod 进行操作的具体的实现，此处传递进来的就是 <code>kl *Kubelet</code> 自身。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go>
+<span style=color:#75715e>// Run starts the kubelet reacting to config updates
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>kl</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>) <span style=color:#a6e22e>Run</span>(<span style=color:#a6e22e>updates</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>PodUpdate</span>) {
+  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>syncLoop</span>(<span style=color:#a6e22e>updates</span>, <span style=color:#a6e22e>kl</span>)
+}
+
+<span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>kl</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>) <span style=color:#a6e22e>syncLoop</span>(<span style=color:#a6e22e>updates</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>PodUpdate</span>, <span style=color:#a6e22e>handler</span> <span style=color:#a6e22e>SyncHandler</span>) {
+  <span style=color:#66d9ef>for</span> {
+    <span style=color:#66d9ef>if</span> !<span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>syncLoopIteration</span>(<span style=color:#a6e22e>updates</span>, <span style=color:#a6e22e>handler</span>, <span style=color:#a6e22e>syncTicker</span>.<span style=color:#a6e22e>C</span>, <span style=color:#a6e22e>housekeepingTicker</span>.<span style=color:#a6e22e>C</span>, <span style=color:#a6e22e>plegCh</span>) {
+      <span style=color:#66d9ef>break</span>
+    }
+  }
+}
+
+<span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>kl</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>) <span style=color:#a6e22e>syncLoopIteration</span>(<span style=color:#a6e22e>configCh</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>PodUpdate</span>, <span style=color:#a6e22e>handler</span> <span style=color:#a6e22e>SyncHandler</span>,
+  <span style=color:#a6e22e>syncCh</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Time</span>, <span style=color:#a6e22e>housekeepingCh</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Time</span>, <span style=color:#a6e22e>plegCh</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>pleg</span>.<span style=color:#a6e22e>PodLifecycleEvent</span>) <span style=color:#66d9ef>bool</span> {
+  <span style=color:#66d9ef>select</span> {
+  <span style=color:#66d9ef>case</span> <span style=color:#a6e22e>u</span>, <span style=color:#a6e22e>open</span> <span style=color:#f92672>:=</span> <span style=color:#f92672>&lt;-</span><span style=color:#a6e22e>configCh</span>:
+    <span style=color:#66d9ef>switch</span> <span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Op</span> {
+    <span style=color:#66d9ef>case</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>ADD</span>:
+      <span style=color:#a6e22e>klog</span>.<span style=color:#a6e22e>V</span>(<span style=color:#ae81ff>2</span>).<span style=color:#a6e22e>Infof</span>(<span style=color:#e6db74>&#34;SyncLoop (ADD, %q): %q&#34;</span>, <span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Source</span>, <span style=color:#a6e22e>format</span>.<span style=color:#a6e22e>Pods</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>))
+      <span style=color:#75715e>// After restarting, kubelet will get all existing pods through
+</span><span style=color:#75715e></span>      <span style=color:#75715e>// ADD as if they are new pods. These pods will then go through the
+</span><span style=color:#75715e></span>      <span style=color:#75715e>// admission process and *may* be rejected. This can be resolved
+</span><span style=color:#75715e></span>      <span style=color:#75715e>// once we have checkpointing.
+</span><span style=color:#75715e></span>      <span style=color:#a6e22e>handler</span>.<span style=color:#a6e22e>HandlePodAdditions</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>)
+    <span style=color:#66d9ef>case</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>UPDATE</span>:
+      <span style=color:#a6e22e>klog</span>.<span style=color:#a6e22e>V</span>(<span style=color:#ae81ff>2</span>).<span style=color:#a6e22e>Infof</span>(<span style=color:#e6db74>&#34;SyncLoop (UPDATE, %q): %q&#34;</span>, <span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Source</span>, <span style=color:#a6e22e>format</span>.<span style=color:#a6e22e>PodsWithDeletionTimestamps</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>))
+      <span style=color:#a6e22e>handler</span>.<span style=color:#a6e22e>HandlePodUpdates</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>)
+    <span style=color:#66d9ef>case</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>REMOVE</span>:
+      <span style=color:#a6e22e>klog</span>.<span style=color:#a6e22e>V</span>(<span style=color:#ae81ff>2</span>).<span style=color:#a6e22e>Infof</span>(<span style=color:#e6db74>&#34;SyncLoop (REMOVE, %q): %q&#34;</span>, <span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Source</span>, <span style=color:#a6e22e>format</span>.<span style=color:#a6e22e>Pods</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>))
+      <span style=color:#a6e22e>handler</span>.<span style=color:#a6e22e>HandlePodRemoves</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>)
+    <span style=color:#66d9ef>case</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>RECONCILE</span>:
+      <span style=color:#a6e22e>klog</span>.<span style=color:#a6e22e>V</span>(<span style=color:#ae81ff>4</span>).<span style=color:#a6e22e>Infof</span>(<span style=color:#e6db74>&#34;SyncLoop (RECONCILE, %q): %q&#34;</span>, <span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Source</span>, <span style=color:#a6e22e>format</span>.<span style=color:#a6e22e>Pods</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>))
+      <span style=color:#a6e22e>handler</span>.<span style=color:#a6e22e>HandlePodReconcile</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>)
+    <span style=color:#66d9ef>case</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>DELETE</span>:
+      <span style=color:#a6e22e>klog</span>.<span style=color:#a6e22e>V</span>(<span style=color:#ae81ff>2</span>).<span style=color:#a6e22e>Infof</span>(<span style=color:#e6db74>&#34;SyncLoop (DELETE, %q): %q&#34;</span>, <span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Source</span>, <span style=color:#a6e22e>format</span>.<span style=color:#a6e22e>Pods</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>))
+      <span style=color:#75715e>// DELETE is treated as a UPDATE because of graceful deletion.
+</span><span style=color:#75715e></span>      <span style=color:#a6e22e>handler</span>.<span style=color:#a6e22e>HandlePodUpdates</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Pods</span>)
+    <span style=color:#66d9ef>default</span>:
+      <span style=color:#a6e22e>klog</span>.<span style=color:#a6e22e>Errorf</span>(<span style=color:#e6db74>&#34;Invalid event type received: %d.&#34;</span>, <span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Op</span>)
+    }
+
+    <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>sourcesReady</span>.<span style=color:#a6e22e>AddSource</span>(<span style=color:#a6e22e>u</span>.<span style=color:#a6e22e>Source</span>)
+  }
+  <span style=color:#66d9ef>return</span> <span style=color:#66d9ef>true</span>
+}
+</code></pre></div><h3 id=synchandler-interface>SyncHandler (interface)
+<a class=anchor href=#synchandler-interface>#</a></h3><p>总的来说，所有的事件都是 <code>SyncHandler</code> 这个接口的实现（此处即是 <code>*Kubelet</code>）处理的，以 <code>HandlePodUpdates</code> 为例：</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// HandlePodUpdates is the callback in the SyncHandler interface for pods
+</span><span style=color:#75715e>// being updated from a config source.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>kl</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>) <span style=color:#a6e22e>HandlePodUpdates</span>(<span style=color:#a6e22e>pods</span> []<span style=color:#f92672>*</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>) {
+  <span style=color:#a6e22e>start</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>clock</span>.<span style=color:#a6e22e>Now</span>()
+  <span style=color:#66d9ef>for</span> <span style=color:#a6e22e>_</span>, <span style=color:#a6e22e>pod</span> <span style=color:#f92672>:=</span> <span style=color:#66d9ef>range</span> <span style=color:#a6e22e>pods</span> {
+    <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>podManager</span>.<span style=color:#a6e22e>UpdatePod</span>(<span style=color:#a6e22e>pod</span>)
+    <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>IsMirrorPod</span>(<span style=color:#a6e22e>pod</span>) {
+      <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>handleMirrorPod</span>(<span style=color:#a6e22e>pod</span>, <span style=color:#a6e22e>start</span>)
+      <span style=color:#66d9ef>continue</span>
+    }
+    <span style=color:#a6e22e>mirrorPod</span>, <span style=color:#a6e22e>_</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>podManager</span>.<span style=color:#a6e22e>GetMirrorPodByPod</span>(<span style=color:#a6e22e>pod</span>)
+    <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>dispatchWork</span>(<span style=color:#a6e22e>pod</span>, <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>SyncPodUpdate</span>, <span style=color:#a6e22e>mirrorPod</span>, <span style=color:#a6e22e>start</span>)
+  }
+}
+</code></pre></div><p><code>Kubelet.SyncHandler</code> 的函数实现，除了 <code>HandlePodRemoves</code> 之外，无论是 Add 还是 Update，最终都会调用 <code>dispatchWork</code>，而这个函数会将请求派发给 <code>statusManager.TerminatePod</code> 或 <code>podWorkers.UpdatePod</code> 进行处理。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// dispatchWork starts the asynchronous sync of the pod in a pod worker.
+</span><span style=color:#75715e>// If the pod has completed termination, dispatchWork will perform no action.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>kl</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>) <span style=color:#a6e22e>dispatchWork</span>(<span style=color:#a6e22e>pod</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>, <span style=color:#a6e22e>syncType</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>SyncPodType</span>, <span style=color:#a6e22e>mirrorPod</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>, <span style=color:#a6e22e>start</span> <span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Time</span>) {
+  <span style=color:#75715e>// check whether we are ready to delete the pod from the API server (all status up to date)
+</span><span style=color:#75715e></span>  <span style=color:#a6e22e>containersTerminal</span>, <span style=color:#a6e22e>podWorkerTerminal</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>podAndContainersAreTerminal</span>(<span style=color:#a6e22e>pod</span>)
+  <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>pod</span>.<span style=color:#a6e22e>DeletionTimestamp</span> <span style=color:#f92672>!=</span> <span style=color:#66d9ef>nil</span> <span style=color:#f92672>&amp;&amp;</span> <span style=color:#a6e22e>containersTerminal</span> {
+    <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>statusManager</span>.<span style=color:#a6e22e>TerminatePod</span>(<span style=color:#a6e22e>pod</span>)
+    <span style=color:#66d9ef>return</span>
+  }
+
+  <span style=color:#75715e>// Run the sync in an async worker.
+</span><span style=color:#75715e></span>  <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>podWorkers</span>.<span style=color:#a6e22e>UpdatePod</span>(<span style=color:#f92672>&amp;</span><span style=color:#a6e22e>UpdatePodOptions</span>{
+    <span style=color:#a6e22e>Pod</span>:        <span style=color:#a6e22e>pod</span>,
+    <span style=color:#a6e22e>MirrorPod</span>:  <span style=color:#a6e22e>mirrorPod</span>,
+    <span style=color:#a6e22e>UpdateType</span>: <span style=color:#a6e22e>syncType</span>,
+  })
+}
+</code></pre></div><p>顺带一提，<code>PodManager</code> 的代码我不是很熟悉，<code>HandlePodAdditions</code> 的这段代码为何如此我暂且蒙古里。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// HandlePodAdditions is the callback in SyncHandler for pods being added from
+</span><span style=color:#75715e>// a config source.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>kl</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>) <span style=color:#a6e22e>HandlePodAdditions</span>(<span style=color:#a6e22e>pods</span> []<span style=color:#f92672>*</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>) {
+  <span style=color:#66d9ef>for</span> <span style=color:#a6e22e>_</span>, <span style=color:#a6e22e>pod</span> <span style=color:#f92672>:=</span> <span style=color:#66d9ef>range</span> <span style=color:#a6e22e>pods</span> {
+    <span style=color:#a6e22e>existingPods</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>podManager</span>.<span style=color:#a6e22e>GetPods</span>() <span style=color:#75715e>// ? Why we need repeat GetPods in iteration?
+</span><span style=color:#75715e></span>    <span style=color:#a6e22e>kl</span>.<span style=color:#a6e22e>podManager</span>.<span style=color:#a6e22e>AddPod</span>(<span style=color:#a6e22e>pod</span>)
+  }
+}
+</code></pre></div><h4 id=statusmanagerterminatepod>StatusManager.TerminatePod
+<a class=anchor href=#statusmanagerterminatepod>#</a></h4><p><code>TerminatePod</code> 会将请求发送给 <code>podStatusChannel</code> 这个 channel。</p><p>在 <code>StatusManager.Start</code> 中，会不断读取这个 channel，调用 <code>syncPod</code> 处理。</p><p>注意此处的 <code>syncPod</code> 与 <code>Kubelet.syncPod</code> 不是同一个函数。因为 StatusManager 只负责处理 Status 相关的数据。这个函数最终会调用 <code>util.PatchPodStatus</code>，通过 client API 发送 Patch 请求。如果 pod 可以被删除，它还会发送 Delete 请求。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>m</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>manager</span>) <span style=color:#a6e22e>TerminatePod</span>(<span style=color:#a6e22e>pod</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>) {
+  <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>podStatusesLock</span>.<span style=color:#a6e22e>Lock</span>()
+  <span style=color:#66d9ef>defer</span> <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>podStatusesLock</span>.<span style=color:#a6e22e>Unlock</span>()
+
+  <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>updateStatusInternal</span>(<span style=color:#a6e22e>pod</span>, <span style=color:#a6e22e>status</span>, <span style=color:#66d9ef>true</span>)
+}
+<span style=color:#75715e>// updateStatusInternal updates the internal status cache, and queues an update to the api server if
+</span><span style=color:#75715e>// necessary. Returns whether an update was triggered.
+</span><span style=color:#75715e>// This method IS NOT THREAD SAFE and must be called from a locked function.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>m</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>manager</span>) <span style=color:#a6e22e>updateStatusInternal</span>(<span style=color:#a6e22e>pod</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>, <span style=color:#a6e22e>status</span> <span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>PodStatus</span>, <span style=color:#a6e22e>forceUpdate</span> <span style=color:#66d9ef>bool</span>) <span style=color:#66d9ef>bool</span> {
+  <span style=color:#66d9ef>select</span> {
+  <span style=color:#66d9ef>case</span> <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>podStatusChannel</span> <span style=color:#f92672>&lt;-</span> <span style=color:#a6e22e>podStatusSyncRequest</span>{<span style=color:#a6e22e>pod</span>.<span style=color:#a6e22e>UID</span>, <span style=color:#a6e22e>newStatus</span>}:
+    <span style=color:#66d9ef>return</span> <span style=color:#66d9ef>true</span>
+  <span style=color:#66d9ef>default</span>:
+    <span style=color:#66d9ef>return</span> <span style=color:#66d9ef>false</span>
+  }
+}
+</code></pre></div><h4 id=podworkersupdatepod>PodWorkers.UpdatePod
+<a class=anchor href=#podworkersupdatepod>#</a></h4><p><code>PodWorkers.UpdatePod</code> 会根据 Pod 的 uid 启动一个 <code>managePodLoop</code> 的 goroutine，监听 <code>podUpdates &lt;-chan UpdatePodOptions</code> 这个 channel。随后将更新的信息传递给 <code>podUpdates</code> 这个 channel。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// Apply the new setting to the specified pod.
+</span><span style=color:#75715e>// If the options provide an OnCompleteFunc, the function is invoked if the update is accepted.
+</span><span style=color:#75715e>// Update requests are ignored if a kill pod request is pending.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>p</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>podWorkers</span>) <span style=color:#a6e22e>UpdatePod</span>(<span style=color:#a6e22e>options</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>UpdatePodOptions</span>) {
+  <span style=color:#a6e22e>pod</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>options</span>.<span style=color:#a6e22e>Pod</span>
+  <span style=color:#a6e22e>uid</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>pod</span>.<span style=color:#a6e22e>UID</span>
+  <span style=color:#66d9ef>var</span> <span style=color:#a6e22e>podUpdates</span> <span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>UpdatePodOptions</span>
+  <span style=color:#66d9ef>var</span> <span style=color:#a6e22e>exists</span> <span style=color:#66d9ef>bool</span>
+
+  <span style=color:#a6e22e>p</span>.<span style=color:#a6e22e>podLock</span>.<span style=color:#a6e22e>Lock</span>()
+  <span style=color:#66d9ef>defer</span> <span style=color:#a6e22e>p</span>.<span style=color:#a6e22e>podLock</span>.<span style=color:#a6e22e>Unlock</span>()
+  <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>podUpdates</span>, <span style=color:#a6e22e>exists</span> = <span style=color:#a6e22e>p</span>.<span style=color:#a6e22e>podUpdates</span>[<span style=color:#a6e22e>uid</span>]; !<span style=color:#a6e22e>exists</span> {
+    <span style=color:#a6e22e>podUpdates</span> = make(<span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>UpdatePodOptions</span>, <span style=color:#ae81ff>1</span>)
+    <span style=color:#a6e22e>p</span>.<span style=color:#a6e22e>podUpdates</span>[<span style=color:#a6e22e>uid</span>] = <span style=color:#a6e22e>podUpdates</span>
+
+    <span style=color:#66d9ef>go</span> <span style=color:#66d9ef>func</span>() {
+      <span style=color:#66d9ef>defer</span> <span style=color:#a6e22e>runtime</span>.<span style=color:#a6e22e>HandleCrash</span>()
+      <span style=color:#a6e22e>p</span>.<span style=color:#a6e22e>managePodLoop</span>(<span style=color:#a6e22e>podUpdates</span>) <span style=color:#75715e>// Handler here
+</span><span style=color:#75715e></span>    }()
+  }
+  <span style=color:#66d9ef>if</span> !<span style=color:#a6e22e>p</span>.<span style=color:#a6e22e>isWorking</span>[<span style=color:#a6e22e>pod</span>.<span style=color:#a6e22e>UID</span>] {
+    <span style=color:#a6e22e>p</span>.<span style=color:#a6e22e>isWorking</span>[<span style=color:#a6e22e>pod</span>.<span style=color:#a6e22e>UID</span>] = <span style=color:#66d9ef>true</span>
+    <span style=color:#a6e22e>podUpdates</span> <span style=color:#f92672>&lt;-</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>options</span>
+  }
+}
+</code></pre></div><p>在 <code>managePodLoop</code>，它又会调用 <code>syncPodFn</code>。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>p</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>podWorkers</span>) <span style=color:#a6e22e>managePodLoop</span>(<span style=color:#a6e22e>podUpdates</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>UpdatePodOptions</span>) {
+  <span style=color:#66d9ef>var</span> <span style=color:#a6e22e>lastSyncTime</span> <span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Time</span>
+  <span style=color:#66d9ef>for</span> <span style=color:#a6e22e>update</span> <span style=color:#f92672>:=</span> <span style=color:#66d9ef>range</span> <span style=color:#a6e22e>podUpdates</span> {
+    <span style=color:#a6e22e>err</span> <span style=color:#f92672>:=</span> <span style=color:#66d9ef>func</span>() <span style=color:#66d9ef>error</span> {
+      <span style=color:#a6e22e>podUID</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>update</span>.<span style=color:#a6e22e>Pod</span>.<span style=color:#a6e22e>UID</span>
+      <span style=color:#a6e22e>err</span> = <span style=color:#a6e22e>p</span>.<span style=color:#a6e22e>syncPodFn</span>(<span style=color:#a6e22e>syncPodOptions</span>{
+        <span style=color:#a6e22e>mirrorPod</span>:      <span style=color:#a6e22e>update</span>.<span style=color:#a6e22e>MirrorPod</span>,
+        <span style=color:#a6e22e>pod</span>:            <span style=color:#a6e22e>update</span>.<span style=color:#a6e22e>Pod</span>,
+        <span style=color:#a6e22e>podStatus</span>:      <span style=color:#a6e22e>status</span>,
+        <span style=color:#a6e22e>killPodOptions</span>: <span style=color:#a6e22e>update</span>.<span style=color:#a6e22e>KillPodOptions</span>,
+        <span style=color:#a6e22e>updateType</span>:     <span style=color:#a6e22e>update</span>.<span style=color:#a6e22e>UpdateType</span>,
+      })
+      <span style=color:#a6e22e>lastSyncTime</span> = <span style=color:#a6e22e>time</span>.<span style=color:#a6e22e>Now</span>()
+      <span style=color:#66d9ef>return</span> <span style=color:#a6e22e>err</span>
+    }()
+    <span style=color:#75715e>// notify the call-back function if the operation succeeded or not
+</span><span style=color:#75715e></span>    <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>update</span>.<span style=color:#a6e22e>OnCompleteFunc</span> <span style=color:#f92672>!=</span> <span style=color:#66d9ef>nil</span> {
+      <span style=color:#a6e22e>update</span>.<span style=color:#a6e22e>OnCompleteFunc</span>(<span style=color:#a6e22e>err</span>)
+    }
+  }
+}
+</code></pre></div><p>而 <code>syncPodFn</code> 是在建立 PodWorker 时传递进来的，实际上是 <code>Kubelet.syncPod</code>。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// pkg/kubelet/kubelet.go
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> <span style=color:#a6e22e>NewMainKubelet</span>(<span style=color:#a6e22e>kubeCfg</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>kubeletconfiginternal</span>.<span style=color:#a6e22e>KubeletConfiguration</span>,
+  <span style=color:#f92672>...</span>) (<span style=color:#f92672>*</span><span style=color:#a6e22e>Kubelet</span>, <span style=color:#66d9ef>error</span>) {
+  <span style=color:#a6e22e>klet</span>.<span style=color:#a6e22e>podWorkers</span> = <span style=color:#a6e22e>newPodWorkers</span>(<span style=color:#a6e22e>klet</span>.<span style=color:#a6e22e>syncPod</span>, <span style=color:#a6e22e>kubeDeps</span>.<span style=color:#a6e22e>Recorder</span>, <span style=color:#a6e22e>klet</span>.<span style=color:#a6e22e>workQueue</span>, <span style=color:#a6e22e>klet</span>.<span style=color:#a6e22e>resyncInterval</span>, <span style=color:#a6e22e>backOffPeriod</span>, <span style=color:#a6e22e>klet</span>.<span style=color:#a6e22e>podCache</span>)
+}
+</code></pre></div><h2 id=kubeletsyncpod>Kubelet.syncPod
+<a class=anchor href=#kubeletsyncpod>#</a></h2><p>真正的处理逻辑即是 syncPod。</p><p>Kubelet.syncPod 会调用一堆函数，包括生成各种事件、更新 Status、kill 掉不应该运行的 pod、创建目录、mount volume、同步 secret、调用容器 runtime 的 <code>SyncPod</code>，等等。</p><h2 id=configch>configCh
+<a class=anchor href=#configch>#</a></h2><p>除了定时任务和 PLEG 事件外，<code>syncLoopIteration</code> 的事件均来自 <code>configCh</code>。</p><p>那么，<code>configCh</code> 从何而来？追溯一下调用栈：</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// kubelet/app/server.go
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> <span style=color:#a6e22e>RunKubelet</span>(<span style=color:#a6e22e>kubeServer</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>options</span>.<span style=color:#a6e22e>KubeletServer</span>, <span style=color:#a6e22e>kubeDeps</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>kubelet</span>.<span style=color:#a6e22e>Dependencies</span>, <span style=color:#a6e22e>runOnce</span> <span style=color:#66d9ef>bool</span>) <span style=color:#66d9ef>error</span> {
+  <span style=color:#75715e>// NewMainKubelet should have set up a pod source config if one didn&#39;t exist
+</span><span style=color:#75715e></span>  <span style=color:#75715e>// when the builder was run. This is just a precaution.
+</span><span style=color:#75715e></span>  <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>kubeDeps</span>.<span style=color:#a6e22e>PodConfig</span> <span style=color:#f92672>==</span> <span style=color:#66d9ef>nil</span> {
+    <span style=color:#66d9ef>return</span> <span style=color:#a6e22e>fmt</span>.<span style=color:#a6e22e>Errorf</span>(<span style=color:#e6db74>&#34;failed to create kubelet, pod source config was nil&#34;</span>)
+  }
+  <span style=color:#a6e22e>podCfg</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>kubeDeps</span>.<span style=color:#a6e22e>PodConfig</span>
+  <span style=color:#a6e22e>startKubelet</span>(<span style=color:#a6e22e>k</span>, <span style=color:#a6e22e>podCfg</span>, <span style=color:#f92672>&amp;</span><span style=color:#a6e22e>kubeServer</span>.<span style=color:#a6e22e>KubeletConfiguration</span>, <span style=color:#a6e22e>kubeDeps</span>, <span style=color:#a6e22e>kubeServer</span>.<span style=color:#a6e22e>EnableCAdvisorJSONEndpoints</span>, <span style=color:#a6e22e>kubeServer</span>.<span style=color:#a6e22e>EnableServer</span>)
+}
+
+<span style=color:#66d9ef>func</span> <span style=color:#a6e22e>startKubelet</span>(<span style=color:#a6e22e>k</span> <span style=color:#a6e22e>kubelet</span>.<span style=color:#a6e22e>Bootstrap</span>, <span style=color:#a6e22e>podCfg</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>config</span>.<span style=color:#a6e22e>PodConfig</span>, <span style=color:#a6e22e>kubeCfg</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>kubeletconfiginternal</span>.<span style=color:#a6e22e>KubeletConfiguration</span>, <span style=color:#a6e22e>kubeDeps</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>kubelet</span>.<span style=color:#a6e22e>Dependencies</span>, <span style=color:#a6e22e>enableCAdvisorJSONEndpoints</span>, <span style=color:#a6e22e>enableServer</span> <span style=color:#66d9ef>bool</span>) {
+  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>k</span>.<span style=color:#a6e22e>Run</span>(<span style=color:#a6e22e>podCfg</span>.<span style=color:#a6e22e>Updates</span>())
+</code></pre></div><p>从注释中也可以看出，实际上，<code>kubeDeps.PodConfig</code> 的初始化来源于 <code>pkg</code> 中的 <code>NewMainKubelet</code> 函数：</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>/// pkg/kubelet/kubelet.go
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> <span style=color:#a6e22e>NewMainKubelet</span>(<span style=color:#a6e22e>kubeCfg</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>kubeletconfiginternal</span>.<span style=color:#a6e22e>KubeletConfiguration</span>,
+  <span style=color:#a6e22e>kubeDeps</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Dependencies</span>,
+  <span style=color:#f92672>...</span>) {
+  <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>kubeDeps</span>.<span style=color:#a6e22e>PodConfig</span> <span style=color:#f92672>==</span> <span style=color:#66d9ef>nil</span> {
+    <span style=color:#66d9ef>var</span> <span style=color:#a6e22e>err</span> <span style=color:#66d9ef>error</span>
+    <span style=color:#a6e22e>kubeDeps</span>.<span style=color:#a6e22e>PodConfig</span>, <span style=color:#a6e22e>err</span> = <span style=color:#a6e22e>makePodSourceConfig</span>(<span style=color:#a6e22e>kubeCfg</span>, <span style=color:#a6e22e>kubeDeps</span>, <span style=color:#a6e22e>nodeName</span>)
+    <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>err</span> <span style=color:#f92672>!=</span> <span style=color:#66d9ef>nil</span> {
+      <span style=color:#66d9ef>return</span> <span style=color:#66d9ef>nil</span>, <span style=color:#a6e22e>err</span>
+    }
+  }
+}
+
+<span style=color:#75715e>// makePodSourceConfig creates a config.PodConfig from the given
+</span><span style=color:#75715e>// KubeletConfiguration or returns an error.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> <span style=color:#a6e22e>makePodSourceConfig</span>(<span style=color:#a6e22e>kubeCfg</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>kubeletconfiginternal</span>.<span style=color:#a6e22e>KubeletConfiguration</span>, <span style=color:#a6e22e>kubeDeps</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Dependencies</span>, <span style=color:#a6e22e>nodeName</span> <span style=color:#a6e22e>types</span>.<span style=color:#a6e22e>NodeName</span>) (<span style=color:#f92672>*</span><span style=color:#a6e22e>config</span>.<span style=color:#a6e22e>PodConfig</span>, <span style=color:#66d9ef>error</span>) {
+  <span style=color:#75715e>// source of all configuration
+</span><span style=color:#75715e></span>  <span style=color:#a6e22e>cfg</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>config</span>.<span style=color:#a6e22e>NewPodConfig</span>(<span style=color:#a6e22e>config</span>.<span style=color:#a6e22e>PodConfigNotificationIncremental</span>, <span style=color:#a6e22e>kubeDeps</span>.<span style=color:#a6e22e>Recorder</span>)
+
+  <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>kubeDeps</span>.<span style=color:#a6e22e>KubeClient</span> <span style=color:#f92672>!=</span> <span style=color:#66d9ef>nil</span> {
+    <span style=color:#a6e22e>klog</span>.<span style=color:#a6e22e>Infof</span>(<span style=color:#e6db74>&#34;Watching apiserver&#34;</span>)
+    <span style=color:#a6e22e>config</span>.<span style=color:#a6e22e>NewSourceApiserver</span>(<span style=color:#a6e22e>kubeDeps</span>.<span style=color:#a6e22e>KubeClient</span>, <span style=color:#a6e22e>nodeName</span>, <span style=color:#a6e22e>cfg</span>.<span style=color:#a6e22e>Channel</span>(<span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>ApiserverSource</span>))
+  }
+  <span style=color:#66d9ef>return</span> <span style=color:#a6e22e>cfg</span>, <span style=color:#66d9ef>nil</span>
+}
+</code></pre></div><p>在 <code>makePodSourceConfig</code> 中，<code>NewPodConfig</code> 就生成了最后使用到的 channel。</p><p>但实际上我们看到 <code>newSourceApiserverFromLW</code> 中，实际写入的 channel 是 <code>cfg.Channel(kubetypes.ApiserverSource)</code>，而不是 <code>PodConfig.Updates()</code>。</p><h3 id=podconfig>PodConfig
+<a class=anchor href=#podconfig>#</a></h3><p>函数 <code>cfg.Channel(source)</code> 里实际工作的是 <code>PodConfig.mux.Channel</code> 这个函数。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// pkg/kubelet/config/config.go
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>c</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>PodConfig</span>) <span style=color:#a6e22e>Channel</span>(<span style=color:#a6e22e>source</span> <span style=color:#66d9ef>string</span>) <span style=color:#66d9ef>chan</span><span style=color:#f92672>&lt;-</span> <span style=color:#66d9ef>interface</span>{} {
+  <span style=color:#a6e22e>c</span>.<span style=color:#a6e22e>sourcesLock</span>.<span style=color:#a6e22e>Lock</span>()
+  <span style=color:#66d9ef>defer</span> <span style=color:#a6e22e>c</span>.<span style=color:#a6e22e>sourcesLock</span>.<span style=color:#a6e22e>Unlock</span>()
+  <span style=color:#a6e22e>c</span>.<span style=color:#a6e22e>sources</span>.<span style=color:#a6e22e>Insert</span>(<span style=color:#a6e22e>source</span>)
+  <span style=color:#66d9ef>return</span> <span style=color:#a6e22e>c</span>.<span style=color:#a6e22e>mux</span>.<span style=color:#a6e22e>Channel</span>(<span style=color:#a6e22e>source</span>)
+}
+</code></pre></div><p><code>mux.Channel</code> 为每个 source 创建一个 channel，并监听这个 channel 的变动，然后调用 <code>merger.Merge</code> 将所有 channel 的变动合并起来。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// pkg/util/config/config.go
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>m</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Mux</span>) <span style=color:#a6e22e>Channel</span>(<span style=color:#a6e22e>source</span> <span style=color:#66d9ef>string</span>) <span style=color:#66d9ef>chan</span> <span style=color:#66d9ef>interface</span>{} {
+  <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>sourceLock</span>.<span style=color:#a6e22e>Lock</span>()
+  <span style=color:#66d9ef>defer</span> <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>sourceLock</span>.<span style=color:#a6e22e>Unlock</span>()
+  <span style=color:#a6e22e>channel</span>, <span style=color:#a6e22e>exists</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>sources</span>[<span style=color:#a6e22e>source</span>]
+  <span style=color:#66d9ef>if</span> <span style=color:#a6e22e>exists</span> {
+    <span style=color:#66d9ef>return</span> <span style=color:#a6e22e>channel</span>
+  }
+  <span style=color:#a6e22e>newChannel</span> <span style=color:#f92672>:=</span> make(<span style=color:#66d9ef>chan</span> <span style=color:#66d9ef>interface</span>{})
+  <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>sources</span>[<span style=color:#a6e22e>source</span>] = <span style=color:#a6e22e>newChannel</span>
+  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>Until</span>(<span style=color:#66d9ef>func</span>() { <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>listen</span>(<span style=color:#a6e22e>source</span>, <span style=color:#a6e22e>newChannel</span>) }, <span style=color:#ae81ff>0</span>, <span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>NeverStop</span>)
+  <span style=color:#66d9ef>return</span> <span style=color:#a6e22e>newChannel</span>
+}
+
+<span style=color:#66d9ef>func</span> (<span style=color:#a6e22e>m</span> <span style=color:#f92672>*</span><span style=color:#a6e22e>Mux</span>) <span style=color:#a6e22e>listen</span>(<span style=color:#a6e22e>source</span> <span style=color:#66d9ef>string</span>, <span style=color:#a6e22e>listenChannel</span> <span style=color:#f92672>&lt;-</span><span style=color:#66d9ef>chan</span> <span style=color:#66d9ef>interface</span>{}) {
+  <span style=color:#66d9ef>for</span> <span style=color:#a6e22e>update</span> <span style=color:#f92672>:=</span> <span style=color:#66d9ef>range</span> <span style=color:#a6e22e>listenChannel</span> {
+    <span style=color:#a6e22e>m</span>.<span style=color:#a6e22e>merger</span>.<span style=color:#a6e22e>Merge</span>(<span style=color:#a6e22e>source</span>, <span style=color:#a6e22e>update</span>)
+  }
+}
+</code></pre></div><p>创建 <code>PodConfig</code> 的时候就通过 <code>newPodStorage</code> 创建了 <code>mux.merger</code>。可以看到创建 <code>PodStorage</code> 的 <code>updates</code> 与 <code>PodConfig.updates</code> 是同一个变量。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// pkg/kubelet/config/config.go
+</span><span style=color:#75715e>// NewPodConfig creates an object that can merge many configuration sources into a stream
+</span><span style=color:#75715e>// of normalized updates to a pod configuration.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> <span style=color:#a6e22e>NewPodConfig</span>(<span style=color:#a6e22e>mode</span> <span style=color:#a6e22e>PodConfigNotificationMode</span>, <span style=color:#a6e22e>recorder</span> <span style=color:#a6e22e>record</span>.<span style=color:#a6e22e>EventRecorder</span>) <span style=color:#f92672>*</span><span style=color:#a6e22e>PodConfig</span> {
+  <span style=color:#a6e22e>updates</span> <span style=color:#f92672>:=</span> make(<span style=color:#66d9ef>chan</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>PodUpdate</span>, <span style=color:#ae81ff>50</span>)
+  <span style=color:#a6e22e>storage</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>newPodStorage</span>(<span style=color:#a6e22e>updates</span>, <span style=color:#a6e22e>mode</span>, <span style=color:#a6e22e>recorder</span>)
+  <span style=color:#a6e22e>podConfig</span> <span style=color:#f92672>:=</span> <span style=color:#f92672>&amp;</span><span style=color:#a6e22e>PodConfig</span>{
+    <span style=color:#a6e22e>pods</span>:    <span style=color:#a6e22e>storage</span>,
+    <span style=color:#a6e22e>mux</span>:     <span style=color:#a6e22e>config</span>.<span style=color:#a6e22e>NewMux</span>(<span style=color:#a6e22e>storage</span>),
+    <span style=color:#a6e22e>updates</span>: <span style=color:#a6e22e>updates</span>,
+    <span style=color:#a6e22e>sources</span>: <span style=color:#a6e22e>sets</span>.<span style=color:#a6e22e>String</span>{},
+  }
+  <span style=color:#66d9ef>return</span> <span style=color:#a6e22e>podConfig</span>
+}
+</code></pre></div><p><code>PodStorage.Merge</code> 保证了消息传递的顺序，并且还过滤了重复的消息。</p><h2 id=listandwatch>ListAndWatch
+<a class=anchor href=#listandwatch>#</a></h2><p>在 <code>NewSourceApiserver</code> 机制中，利用了 <code>client-go</code> 的 List and Watch 机制不断接收消息。相关稍后再议。</p><div class=highlight><pre style=color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4><code class=language-go data-lang=go><span style=color:#75715e>// pkg/kubelet/config/apiserver.go
+</span><span style=color:#75715e>// NewSourceApiserver creates a config source that watches and pulls from the apiserver.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> <span style=color:#a6e22e>NewSourceApiserver</span>(<span style=color:#a6e22e>c</span> <span style=color:#a6e22e>clientset</span>.<span style=color:#a6e22e>Interface</span>, <span style=color:#a6e22e>nodeName</span> <span style=color:#a6e22e>types</span>.<span style=color:#a6e22e>NodeName</span>, <span style=color:#a6e22e>updates</span> <span style=color:#66d9ef>chan</span><span style=color:#f92672>&lt;-</span> <span style=color:#66d9ef>interface</span>{}) {
+  <span style=color:#a6e22e>lw</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>cache</span>.<span style=color:#a6e22e>NewListWatchFromClient</span>(<span style=color:#a6e22e>c</span>.<span style=color:#a6e22e>CoreV1</span>().<span style=color:#a6e22e>RESTClient</span>(), <span style=color:#e6db74>&#34;pods&#34;</span>, <span style=color:#a6e22e>metav1</span>.<span style=color:#a6e22e>NamespaceAll</span>, <span style=color:#a6e22e>fields</span>.<span style=color:#a6e22e>OneTermEqualSelector</span>(<span style=color:#a6e22e>api</span>.<span style=color:#a6e22e>PodHostField</span>, string(<span style=color:#a6e22e>nodeName</span>)))
+  <span style=color:#a6e22e>newSourceApiserverFromLW</span>(<span style=color:#a6e22e>lw</span>, <span style=color:#a6e22e>updates</span>)
+}
+
+<span style=color:#75715e>// newSourceApiserverFromLW holds creates a config source that watches and pulls from the apiserver.
+</span><span style=color:#75715e></span><span style=color:#66d9ef>func</span> <span style=color:#a6e22e>newSourceApiserverFromLW</span>(<span style=color:#a6e22e>lw</span> <span style=color:#a6e22e>cache</span>.<span style=color:#a6e22e>ListerWatcher</span>, <span style=color:#a6e22e>updates</span> <span style=color:#66d9ef>chan</span><span style=color:#f92672>&lt;-</span> <span style=color:#66d9ef>interface</span>{}) {
+  <span style=color:#a6e22e>send</span> <span style=color:#f92672>:=</span> <span style=color:#66d9ef>func</span>(<span style=color:#a6e22e>objs</span> []<span style=color:#66d9ef>interface</span>{}) {
+    <span style=color:#66d9ef>var</span> <span style=color:#a6e22e>pods</span> []<span style=color:#f92672>*</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>
+    <span style=color:#66d9ef>for</span> <span style=color:#a6e22e>_</span>, <span style=color:#a6e22e>o</span> <span style=color:#f92672>:=</span> <span style=color:#66d9ef>range</span> <span style=color:#a6e22e>objs</span> {
+      <span style=color:#a6e22e>pods</span> = append(<span style=color:#a6e22e>pods</span>, <span style=color:#a6e22e>o</span>.(<span style=color:#f92672>*</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>))
+    }
+    <span style=color:#a6e22e>updates</span> <span style=color:#f92672>&lt;-</span> <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>PodUpdate</span>{<span style=color:#a6e22e>Pods</span>: <span style=color:#a6e22e>pods</span>, <span style=color:#a6e22e>Op</span>: <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>SET</span>, <span style=color:#a6e22e>Source</span>: <span style=color:#a6e22e>kubetypes</span>.<span style=color:#a6e22e>ApiserverSource</span>}
+  }
+  <span style=color:#a6e22e>r</span> <span style=color:#f92672>:=</span> <span style=color:#a6e22e>cache</span>.<span style=color:#a6e22e>NewReflector</span>(<span style=color:#a6e22e>lw</span>, <span style=color:#f92672>&amp;</span><span style=color:#a6e22e>v1</span>.<span style=color:#a6e22e>Pod</span>{}, <span style=color:#a6e22e>cache</span>.<span style=color:#a6e22e>NewUndeltaStore</span>(<span style=color:#a6e22e>send</span>, <span style=color:#a6e22e>cache</span>.<span style=color:#a6e22e>MetaNamespaceKeyFunc</span>), <span style=color:#ae81ff>0</span>)
+  <span style=color:#66d9ef>go</span> <span style=color:#a6e22e>r</span>.<span style=color:#a6e22e>Run</span>(<span style=color:#a6e22e>wait</span>.<span style=color:#a6e22e>NeverStop</span>)
+}
+</code></pre></div></article><footer class=book-footer><div class="flex flex-wrap justify-between"><div class=book-languages tabindex=0 aria-haspopup=true><ul><li class="flex align-center"><img src=/svg/translate.svg class=book-icon alt=Languages>
+English</li></ul><ul class=book-languages-list><li class=active><a href=https://example.com/ class="flex align-center"><img src=/svg/translate.svg class=book-icon alt=Languages>
+English</a></li><li><a href=https://example.com/ru/ class="flex align-center"><img src=/svg/translate.svg class=book-icon alt=Languages>
+Russian</a></li><li><a href=https://example.com/zh/ class="flex align-center"><img src=/svg/translate.svg class=book-icon alt=Languages>
+Chinese</a></li></ul></div><div><a class="flex align-center" href=https://github.com/lingsamuel/k8s-book-src/commit/71cceaa7f7781557753bb99b7f1dcdd28fad9888 title="Last modified by Ling Samuel | November 5, 2020" target=_blank rel=noopener><img src=/svg/calendar.svg class=book-icon alt=Calendar>
+<span>November 5, 2020</span></a></div><div><a class="flex align-center" href=https://github.com/lingsamuel/k8s-book-src/edit/master/content/kubernetes/kubelet/startup.md target=_blank rel=noopener><img src=/svg/edit.svg class=book-icon alt=Edit>
+<span>Edit this page</span></a></div></div></footer><label for=menu-control class="hidden book-menu-overlay"></label></div><aside class=book-toc><nav id=TableOfContents><ul><li><a href=#kubelet-startup>Kubelet Startup</a><ul><li><a href=#run>Run</a></li><li><a href=#syncloop>syncLoop</a><ul><li><a href=#synchandler-interface>SyncHandler (interface)</a></li></ul></li><li><a href=#kubeletsyncpod>Kubelet.syncPod</a></li><li><a href=#configch>configCh</a><ul><li><a href=#podconfig>PodConfig</a></li></ul></li><li><a href=#listandwatch>ListAndWatch</a></li></ul></li></ul></nav></aside></main></body></html>
