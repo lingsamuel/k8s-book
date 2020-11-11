@@ -2,7 +2,7 @@
 启动时主要工作便是运行 scheduleOne 函数，从队列中不断地获取需要调度的 pod。
  mermaid.initialize({ &#34;flowchart&#34;: { &#34;useMaxWidth&#34;:true }, &#34;theme&#34;: &#34;default&#34; } ) sequenceDiagram participant main as cmd/kube-scheduler/scheduler.go participant server as cmd/kube-scheduler/app/server.go participant sched as pkg/scheduler/scheduler.go participant q as pkg/scheduler/internal/queue/scheduling_queue.go main--server: NewSchedulerCommand() server--server: runCommand()Setup()Run() server--sched: Run() sched--q: Run() par loop Cleaner q--q: flushBackoffQCompleted() q--q: flushUnschedulableQLeftover() end par loop Main sched--sched: scheduleOne() end scheduleOne 函数主要工作就是从队列中提取 pod 的信息，然后执行 Scheduling Framework 中的 Scheduling Cycle 和 Binding Cycle。"><meta name=theme-color content="#FFFFFF"><meta property="og:title" content><meta property="og:description" content="Kube Scheduler Startup #  由于 kube-scheduler 是项目中后期才拆分出来的，所以结构也相对简单。
 启动时主要工作便是运行 scheduleOne 函数，从队列中不断地获取需要调度的 pod。
- mermaid.initialize({ &#34;flowchart&#34;: { &#34;useMaxWidth&#34;:true }, &#34;theme&#34;: &#34;default&#34; } ) sequenceDiagram participant main as cmd/kube-scheduler/scheduler.go participant server as cmd/kube-scheduler/app/server.go participant sched as pkg/scheduler/scheduler.go participant q as pkg/scheduler/internal/queue/scheduling_queue.go main--server: NewSchedulerCommand() server--server: runCommand()Setup()Run() server--sched: Run() sched--q: Run() par loop Cleaner q--q: flushBackoffQCompleted() q--q: flushUnschedulableQLeftover() end par loop Main sched--sched: scheduleOne() end scheduleOne 函数主要工作就是从队列中提取 pod 的信息，然后执行 Scheduling Framework 中的 Scheduling Cycle 和 Binding Cycle。"><meta property="og:type" content="article"><meta property="og:url" content="https://lingsamuel.github.io/k8s-book/kubernetes/kube-scheduler/startup/"><meta property="article:modified_time" content="2020-11-11T09:56:42+08:00"><title>Startup | K8s Learning</title><link rel=manifest href=/k8s-book/manifest.json><link rel=icon href=/k8s-book/favicon.png type=image/x-icon><link rel=stylesheet href=/k8s-book/book.min.134b70e5316650a530cb42e4e8630b2a01d532bebfc0337028211175336e4806.css integrity="sha256-E0tw5TFmUKUwy0Lk6GMLKgHVMr6/wDNwKCERdTNuSAY="><script defer src=/k8s-book/en.search.min.ef672656eabdc539ca464e18046aaf6cc6c2ad870bf508358c4c6eb969b98541.js integrity="sha256-72cmVuq9xTnKRk4YBGqvbMbCrYcL9Qg1jExuuWm5hUE="></script><script defer src=/k8s-book/sw.min.c7f55df6e3e36e6aaaf21e8e04fd384c99ba9f318276aa57382245bd78636508.js integrity="sha256-x/Vd9uPjbmqq8h6OBP04TJm6nzGCdqpXOCJFvXhjZQg="></script></head><body><input type=checkbox class="hidden toggle" id=menu-control>
+ mermaid.initialize({ &#34;flowchart&#34;: { &#34;useMaxWidth&#34;:true }, &#34;theme&#34;: &#34;default&#34; } ) sequenceDiagram participant main as cmd/kube-scheduler/scheduler.go participant server as cmd/kube-scheduler/app/server.go participant sched as pkg/scheduler/scheduler.go participant q as pkg/scheduler/internal/queue/scheduling_queue.go main--server: NewSchedulerCommand() server--server: runCommand()Setup()Run() server--sched: Run() sched--q: Run() par loop Cleaner q--q: flushBackoffQCompleted() q--q: flushUnschedulableQLeftover() end par loop Main sched--sched: scheduleOne() end scheduleOne 函数主要工作就是从队列中提取 pod 的信息，然后执行 Scheduling Framework 中的 Scheduling Cycle 和 Binding Cycle。"><meta property="og:type" content="article"><meta property="og:url" content="https://lingsamuel.github.io/k8s-book/kubernetes/kube-scheduler/startup/"><meta property="article:modified_time" content="2020-11-11T10:30:38+08:00"><title>Startup | K8s Learning</title><link rel=manifest href=/k8s-book/manifest.json><link rel=icon href=/k8s-book/favicon.png type=image/x-icon><link rel=stylesheet href=/k8s-book/book.min.134b70e5316650a530cb42e4e8630b2a01d532bebfc0337028211175336e4806.css integrity="sha256-E0tw5TFmUKUwy0Lk6GMLKgHVMr6/wDNwKCERdTNuSAY="><script defer src=/k8s-book/en.search.min.c3210199b30c27dc634d192d26c3346ef898fb60d85094a7a5f3feb6c6afc866.js integrity="sha256-wyEBmbMMJ9xjTRktJsM0bviY+2DYUJSnpfP+tsavyGY="></script><script defer src=/k8s-book/sw.min.c7f55df6e3e36e6aaaf21e8e04fd384c99ba9f318276aa57382245bd78636508.js integrity="sha256-x/Vd9uPjbmqq8h6OBP04TJm6nzGCdqpXOCJFvXhjZQg="></script></head><body><input type=checkbox class="hidden toggle" id=menu-control>
 <input type=checkbox class="hidden toggle" id=toc-control><main class="container flex"><aside class=book-menu><nav><h2 class=book-brand><a href=/k8s-book><span>K8s Learning</span></a></h2><div class=book-search><input type=text id=book-search-input placeholder=Search aria-label=Search maxlength=64 data-hotkeys=s/><div class="book-search-spinner hidden"></div><ul id=book-search-results></ul></div><ul><li><a href=/k8s-book/kubernetes/introduction/>Introduction</a></li><li>Basic<ul><li><a href=/k8s-book/kubernetes/basic/components/>Components</a></li><li><a href=/k8s-book/kubernetes/basic/architecture/>Architecture</a></li></ul></li><li>Concept<ul><li><a href=/k8s-book/kubernetes/concept/informer/>Informer</a></li></ul></li><li>Kubelet<ul><li><a href=/k8s-book/kubernetes/kubelet/startup/>Startup</a></li></ul></li><li>KubeApiServer</li><li>KubeProxy</li><li>KubeScheduler<ul><li><a href=/k8s-book/kubernetes/kube-scheduler/startup/ class=active>Startup</a></li></ul></li></ul><hr><ul><li><a href=/k8s-book/posts/>Blog</a></li><li><a href=https://github.com/lingsamuel target=_blank rel=noopener>Github</a></li><li><a href=https://github.com/lingsamuel/hugo-book target=_blank rel=noopener>Hugo Themes</a></li></ul></nav><script>(function(){var menu=document.querySelector("aside.book-menu nav");addEventListener("beforeunload",function(event){localStorage.setItem("menu.scrollTop",menu.scrollTop);});menu.scrollTop=localStorage.getItem("menu.scrollTop");})();</script></aside><div class=book-page><header class=book-header><div class="flex align-center justify-between"><label for=menu-control><img src=/k8s-book/svg/menu.svg class=book-icon alt=Menu></label>
 <strong>Startup</strong>
 <label for=toc-control><img src=/k8s-book/svg/toc.svg class=book-icon alt="Table of Contents"></label></div><aside class="hidden clearfix"><nav id=TableOfContents><ul><li><a href=#kube-scheduler-startup>Kube Scheduler Startup</a></li></ul></nav></aside></header><article class=markdown><h1 id=kube-scheduler-startup>Kube Scheduler Startup
@@ -22,26 +22,54 @@ end
 par loop Main
 sched-->>sched: scheduleOne()
 end</p><p><code>scheduleOne</code> 函数主要工作就是从队列中提取 pod 的信息，然后执行
-<a href=https://github.com/kubernetes/enhancements/tree/4d97dfb2a1395959b79dc6f7fd3d7054bb9a9739/keps/sig-scheduling/624-scheduling-framework#scheduling-cycle--binding-cycle>Scheduling Framework</a> 中的 <code>Scheduling Cycle</code> 和 <code>Binding Cycle</code>。</p><p class=mermaid>sequenceDiagram
-participant sched as pkg/scheduler/scheduler.go
-participant q as pkg/scheduler/internal/queue/scheduling_queue.go
-participant algo as pkg/scheduler/core/generic_scheduler.go
-participant f as pkg/scheduler/framework/runtime/framework.go
-participant ex as pkg/scheduler/framework/extender.go
-sched-->>q: NextPod()
-q-->>sched: Pop(): *QueuedPodInfo
-sched-->>algo: Schedule()
-algo-->>sched: ScheduleResult
+<a href=https://github.com/kubernetes/enhancements/tree/4d97dfb2a1395959b79dc6f7fd3d7054bb9a9739/keps/sig-scheduling/624-scheduling-framework#scheduling-cycle--binding-cycle>Scheduling Framework</a> 中的 <code>Scheduling Cycle</code> 和 <code>Binding Cycle</code>。</p><p>位于 <code>pkg/scheduler/</code> 下。</p><p class=mermaid>```mermaid
+sequenceDiagram
+participant sched as scheduler.go
+participant algo as core/generic_scheduler.go
+participant f as framework/runtime/framework.go
+participant ex as framework/extender.go
+participant q as internal/queue/scheduling_queue.go
+sched-->>+q: NextPod()
+q-->>-sched: Pop(): *QueuedPodInfo
+Note right of sched: Scheduling Cycle
+sched-->>+algo: Schedule()
+algo-->>-sched: ScheduleResult
+sched-->>f: RunPostFilterPlugins()
 sched-->>f: RunReservePluginsReserve()
+sched-->>f: RunPermitPlugins()
 par Binding
+Note right of sched: Binding Cycle
+sched-->>f: WaitOnPermit()
 sched-->>f: RunPreBindPlugins()
-sched-->>sched: bind()
-sched-->>sched: extendersBinding()
+sched-->>+sched: bind()
+sched-->>+sched: extendersBinding()
 sched-->>algo: Extenders()
 algo-->>sched: []Extender
-sched-->>ex: Bind()
-sched-->>f: RunBindPlugins()
+sched-->>-ex: Bind()
+sched-->>-f: RunBindPlugins()
 sched-->>f: RunPostBindPlugins()
-end</p></article><footer class=book-footer><div class="flex flex-wrap justify-between"><div><a class="flex align-center" href=https://github.com/lingsamuel/k8s-book-src/commit/cbedbcaf6b88cfb6bf17e1a75cc063c7ede403fc title="Last modified by Ling Samuel | November 11, 2020" target=_blank rel=noopener><img src=/k8s-book/svg/calendar.svg class=book-icon alt=Calendar>
+end
+```</p><p>其中，位于 <code>core/generic_scheduler.go</code> 的 <code>Schedule()</code> 函数流程如下：</p><p class=mermaid>```mermaid
+sequenceDiagram
+participant sched as scheduler.go
+participant algo as core/generic_scheduler.go
+participant f as framework/runtime/framework.go
+participant ex as framework/extender.go
+sched-->>algo: Schedule()
+algo-->>+algo: findNodesThatFitPod()
+algo-->>f: RunPreFilterPlugins()
+algo->>+algo: findNodesThatPassFilters()
+algo-->>+algo: PodPassesFiltersOnNode()
+algo-->>-f: RunFilterPlugins()
+deactivate algo
+algo-->>+algo: findNodesThatPassExtenders()
+algo-->>-ex: Filter()
+deactivate algo
+algo-->>+algo: prioritizeNodes()
+algo-->f: RunPreScorePlugins()
+algo-->f: RunScorePlugins()
+deactivate algo
+algo-->>sched: ScheduleResult
+```</p></article><footer class=book-footer><div class="flex flex-wrap justify-between"><div><a class="flex align-center" href=https://github.com/lingsamuel/k8s-book-src/commit/c43bfcdb00c2236ca05ad407bcd6e934bea56d2a title="Last modified by Ling Samuel | November 11, 2020" target=_blank rel=noopener><img src=/k8s-book/svg/calendar.svg class=book-icon alt=Calendar>
 <span>November 11, 2020</span></a></div><div><a class="flex align-center" href=https://github.com/lingsamuel/k8s-book-src/edit/master/content/kubernetes/kube-scheduler/startup.md target=_blank rel=noopener><img src=/k8s-book/svg/edit.svg class=book-icon alt=Edit>
 <span>Edit this page</span></a></div></div></footer><label for=menu-control class="hidden book-menu-overlay"></label></div><aside class=book-toc><nav id=TableOfContents><ul><li><a href=#kube-scheduler-startup>Kube Scheduler Startup</a></li></ul></nav></aside></main></body></html>
