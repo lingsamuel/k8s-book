@@ -1,1 +1,0 @@
-if(navigator.serviceWorker){navigator.serviceWorker.register("/k8s-book/sw.js",{scope:"/k8s-book/"});}
